@@ -134,7 +134,7 @@ pub struct DiscreteValues<V>
 where
     V: VcpValue,
 {
-    discrete_values: Vec<V>,
+    pub discrete_values: Vec<V>,
 }
 
 impl<V> Default for DiscreteValues<V>

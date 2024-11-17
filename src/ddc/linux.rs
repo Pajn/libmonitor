@@ -2,7 +2,7 @@ use i2cdev::{
     core::I2CTransfer,
     linux::{I2CMessage, LinuxI2CBus},
 };
-use std::{ffi::OsStr, fs::File, io::Read, path::Path, time::Duration};
+use std::{ffi::OsStr, fs::File, io::Read, path::Path, str::FromStr, time::Duration};
 use udev::Device;
 
 use super::{
@@ -18,22 +18,22 @@ const RECEIVE_EDID_RETRIES: u8 = 3;
 pub fn receive_edid(i2c_bus: &mut LinuxI2CBus) -> Result<Edid, anyhow::Error> {
     // reset eddc segment pointer. May fail if display does not implement eddc for specific input
     // some displays behave differently depending on the input source.
-    let _ = i2c_bus
-        .transfer(&mut [i2cdev::linux::LinuxI2CMessage::write(&[0x0])
-            .with_address(EDDC_SEGMENT_POINTER_ADDR.into())]);
+    let _ = i2c_bus.transfer(&mut [i2cdev::linux::LinuxI2CMessage::write(&[0x0])
+        .with_address(EDDC_SEGMENT_POINTER_ADDR.into())]);
 
     let mut receive_try = RECEIVE_EDID_RETRIES;
     loop {
         //initiate edid reading
         i2c_bus
-            .transfer(&mut [i2cdev::linux::LinuxI2CMessage::write(&[0x0])
-                .with_address(EDID_ADDRESS.into())])
+            .transfer(&mut [
+                i2cdev::linux::LinuxI2CMessage::write(&[0x0]).with_address(EDID_ADDRESS.into())
+            ])
             .map_err(|err| anyhow::Error::new(err))?;
         //read first 128 bytes of edid
         let mut data: [u8; 128] = [0; 128];
         let _ = i2c_bus
             .transfer(&mut [
-                i2cdev::linux::LinuxI2CMessage::read(&mut data).with_address(EDID_ADDRESS.into()),
+                i2cdev::linux::LinuxI2CMessage::read(&mut data).with_address(EDID_ADDRESS.into())
             ])
             .map_err(|err| anyhow::Error::new(err))?;
         let x = parse_edid(&data).map_err(|err| anyhow::Error::new(err));
@@ -263,7 +263,7 @@ impl LinuxDdcDeviceEnumerator {
                     .is_some_and(|name| !ignore_device_by_name(name))
             })
             .filter(|dev| device_is_display(dev))
-            .filter(|dev| dev.sysnum().is_some_and(|id| !is_phantom_ddc_device(id)))
+            .filter(|dev| sysnum(&dev).is_some_and(|id| !is_phantom_ddc_device(id)))
             .filter_map(|i2c_device| {
                 if let Some(drm_device) = find_parent_drm_device(&i2c_device) {
                     Some(LinuxDrmI2C {
@@ -286,9 +286,15 @@ impl Iterator for LinuxDdcDeviceEnumerator {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.inner_iter.next().and_then(|dev| {
-            dev.i2c_device
-                .sysnum()
-                .map(|id| LinuxDdcDevice::new(id, dev.drm_device))
+            sysnum(&dev.i2c_device).map(|id| LinuxDdcDevice::new(id, dev.drm_device))
         })
     }
+}
+
+fn sysnum(device: &udev::Device) -> Option<usize> {
+    device.sysnum().or_else(|| {
+        let sysname = device.sysname().to_str()?;
+        let rest: String = sysname.chars().skip_while(|c| *c != '-').skip(1).collect();
+        FromStr::from_str(&rest).ok()
+    })
 }
